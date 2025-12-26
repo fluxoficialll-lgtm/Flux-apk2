@@ -1,0 +1,98 @@
+name: 📱 Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'URL do Backend (Ex: https://flux-api.onrender.com)'
+        required: false
+        default: 'https://flux-api.onrender.com'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: 🏗️ Gerar APK Conectado
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Extração Opcional de ZIP
+        id: extract
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" -print -quit)
+          
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ℹ️ Nenhum arquivo .zip detectado. Usando código direto do repositório."
+          else
+            echo "📂 Pacote ZIP detectado: $ZIP_FILE. Extraindo..."
+            mkdir -p temp_extract
+            unzip -o "$ZIP_FILE" -d temp_extract
+            
+            # Localizar onde está o package.json
+            PKG_PATH=$(find temp_extract -name "package.json" -print -quit)
+            if [ -n "$PKG_PATH" ]; then
+              ROOT_DIR=$(dirname "$PKG_PATH")
+              echo "📂 Movendo arquivos da raiz: $ROOT_DIR"
+              cp -rf "$ROOT_DIR"/. .
+            else
+              echo "⚠️ package.json não encontrado no ZIP, mantendo arquivos originais."
+            fi
+            rm -rf temp_extract
+            rm "$ZIP_FILE"
+          fi
+
+      - name: 🟢 Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # O cache foi desativado porque ele exige um arquivo package-lock.json ou yarn.lock
+          # fixo antes da execução. Para builds baseados em ZIP ou dinâmicos, isso causa erro.
+
+      - name: ☕ Configurar Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 🛠️ Instalar Dependências
+        run: npm install --no-package-lock
+
+      - name: 🏗️ Build do Frontend (Vite)
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_url || 'https://flux-api.onrender.com' }}
+
+      - name: 📲 Sincronizar Capacitor (Android)
+        run: |
+          # Se a pasta android não existir, cria
+          if [ ! -d "android" ]; then
+            echo "🤖 Criando plataforma Android nativa..."
+            npx cap add android
+          fi
+          
+          # Copia os arquivos do dist para a pasta android
+          npx cap copy android
+          npx cap sync android
+
+      - name: 🔨 Compilar APK via Gradle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_url || 'https://flux-api.onrender.com' }}
+
+      - name: 🚀 Upload do APK Gerado
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flux-App-Android
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+          
